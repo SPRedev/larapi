@@ -84,3 +84,18 @@ Route::middleware('auth:sanctum')->get('/form-data/create-task', [TaskController
 
 // Route to actually create the task
 Route::middleware('auth:sanctum')->post('/tasks', [TaskController::class, 'createTask']);
+// In routes/api.php
+
+// Add this line with your other task routes
+Route::middleware('auth:sanctum')->put('/tasks/{task}', [TaskController::class, 'updateTask']);
+// In routes/api.php
+
+// You should already have these routes:
+Route::middleware('auth:sanctum')->get('/tasks', [TaskController::class, 'index']);
+Route::middleware('auth:sanctum')->post('/tasks', [TaskController::class, 'createTask']);
+Route::middleware('auth:sanctum')->get('/tasks/{task}', [TaskController::class, 'show']);
+Route::middleware('auth:sanctum')->put('/tasks/{task}', [TaskController::class, 'updateTask']);
+Route::middleware('auth:sanctum')->post('/tasks/{task}/update-status', [TaskController::class, 'updateTaskStatus']);
+
+// ✅ --- ADD THIS NEW LINE FOR DELETING TASKS ---
+Route::middleware('auth:sanctum')->delete('/tasks/{task}', [TaskController::class, 'deleteTask']);
