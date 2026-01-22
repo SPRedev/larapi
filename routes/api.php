@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\TaskController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
+use App\Http\Controllers\Api\ManualUserController; 
 
 //======================================================================
 // GUEST ROUTES (No Authentication Required)
@@ -63,3 +64,4 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/form-data/create-task', [TaskController::class, 'getCreateTaskFormData']);
 
 });
+Route::post('/user/manual-change-password', [ManualUserController::class, 'changePassword']);
