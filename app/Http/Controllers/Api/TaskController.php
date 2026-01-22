@@ -1,5 +1,7 @@
 <?php
 
+// TaskController.php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -17,24 +19,24 @@ class TaskController extends Controller
      * A reusable helper to apply visibility rules to a task query.
      */
     private function applyTaskVisibilityScope($query, $userId, $accessSchema)
-    {
-        if (in_array('view', $accessSchema)) {
-            // This user has global view access, so no filters are needed.
-            return;
-        } 
-        
-        if (in_array('view_assigned', $accessSchema)) {
-            // This user can see tasks they created OR are assigned to.
-            $query->where(function ($subQuery) use ($userId) {
-                $subQuery->where('tasks.created_by', $userId)
-                         ->orWhereRaw('FIND_IN_SET(?, tasks.field_171)', [$userId]);
-            });
-            return;
-        }
-
-        // If neither 'view' nor 'view_assigned' is present, they can see nothing.
-        $query->whereRaw('1 = 0'); // This is a safe way to return no results
+{
+    // We check for the MORE RESTRICTIVE rule FIRST.
+    if (in_array('view_assigned', $accessSchema)) {
+        $query->where(function ($subQuery) use ($userId) {
+            $subQuery->where('tasks.created_by', $userId)
+                     ->orWhereRaw('FIND_IN_SET(?, tasks.field_171)', [$userId]);
+        });
+        return; // Apply this rule and stop.
     }
+
+    // If 'view_assigned' is not present, THEN we check for the global 'view' rule.
+    if (in_array('view', $accessSchema)) {
+        return; // This user can see everything, so we don't add any filters.
+    } 
+    
+    // If neither rule is present, they can't see anything.
+    $query->whereRaw('1 = 0');
+}
 
     //======================================================================
     // PUBLIC API METHODS
