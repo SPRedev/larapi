@@ -3,10 +3,13 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\TaskController;
-use Illuminate\Support\Facades\Auth; // <-- Add this
-use Illuminate\Validation\ValidationException; // <-- And this
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
-// --- START: ADD THIS NEW LOGIN ROUTE ---
+
+//======================================================================
+// GUEST ROUTES (No Authentication Required)
+//======================================================================
 Route::post('/login', function (Request $request) {
     $credentials = $request->validate([
         'email' => ['required', 'email'],
@@ -22,80 +25,41 @@ Route::post('/login', function (Request $request) {
     $user = Auth::user();
     $token = $user->createToken('api-token');
 
-    return response()->json([
-        'token' => $token->plainTextToken
-    ]);
-});
-// --- END: ADD THIS NEW LOGIN ROUTE ---
-
-
-// This is the default route that comes with Laravel
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    $userId = $request->user()->id; // Get the authenticated user's ID
-
-    // Fetch the user's details from the Rukovoditel users table (app_entity_1)
-    $rukoUser = DB::table('app_entity_1')
-        ->where('id', $userId)
-        ->select('id', 'field_7 as firstname', 'field_8 as lastname', 'field_9 as email', 'field_12 as username')
-        ->first();
-
-    if (!$rukoUser) {
-        return response()->json(['error' => 'User not found in Rukovoditel'], 404);
-    }
-
-    return response()->json($rukoUser);
+    return response()->json(['token' => $token->plainTextToken]);
 });
 
-// This is our new route for getting tasks. It IS protected by authentication.
-Route::middleware('auth:sanctum')->get('/tasks', [TaskController::class, 'index']);
-
-// routes/api.php
-
-// Add this new route for getting a single task by its ID
-Route::middleware('auth:sanctum')->get('/tasks/{task_id}', [TaskController::class, 'show']);
-
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
-});
-// In routes/api.php
-
-// Add this new route for getting notifications
-Route::middleware('auth:sanctum')->get('/notifications', [TaskController::class, 'getNotifications']);
-
-// In routes/api.php
-Route::middleware('auth:sanctum')->get('/tasks/{task_id}/download-attachment/{filename}', [TaskController::class, 'downloadAttachment']);
-// In routes/api.php
 Route::get('/statuses', [TaskController::class, 'getStatuses']);
-// In routes/api.php
-Route::middleware('auth:sanctum')->post('/tasks/{task_id}/update-status', [TaskController::class, 'updateStatus']);
-// In routes/api.php
 
-// Route to create a new comment on a task
-Route::middleware('auth:sanctum')->post('/tasks/{task_id}/comments', [TaskController::class, 'createComment']);
 
-// Route to update an existing comment
-Route::middleware('auth:sanctum')->put('/comments/{comment_id}', [TaskController::class, 'updateComment']);
-// In routes/api.php
-Route::middleware('auth:sanctum')->delete('/comments/{comment_id}', [TaskController::class, 'deleteComment']);
-// In routes/api.php
+//======================================================================
+// AUTHENTICATED ROUTES (Requires Sanctum Token)
+//======================================================================
+Route::middleware('auth:sanctum')->group(function () {
+    
+    // --- User Info ---
+    Route::get('/user', function (Request $request) {
+        $rukoUser = DB::table('app_entity_1')
+            ->where('id', $request->user()->id)
+            ->select('id', 'field_12 as username')
+            ->first();
+        return response()->json($rukoUser);
+    });
 
-// NEW: Route to get data needed for the create task form
-Route::middleware('auth:sanctum')->get('/form-data/create-task', [TaskController::class, 'getCreateTaskFormData']);
+    // --- Tasks ---
+    Route::get('/tasks', [TaskController::class, 'index']);
+    Route::post('/tasks', [TaskController::class, 'createTask']);
+    Route::get('/tasks/{task}', [TaskController::class, 'show']);
+    Route::put('/tasks/{task}', [TaskController::class, 'updateTask']);
+    Route::delete('/tasks/{task}', [TaskController::class, 'deleteTask']);
+    Route::post('/tasks/{task}/update-status', [TaskController::class, 'updateTaskStatus']);
+    
+    // --- Comments ---
+    Route::post('/tasks/{task}/comments', [TaskController::class, 'createComment']);
+    Route::put('/comments/{comment}', [TaskController::class, 'updateComment']);
+    Route::delete('/comments/{comment}', [TaskController::class, 'deleteComment']);
 
-// Route to actually create the task
-Route::middleware('auth:sanctum')->post('/tasks', [TaskController::class, 'createTask']);
-// In routes/api.php
+    // --- Notifications & Form Data ---
+    Route::get('/notifications', [TaskController::class, 'getNotifications']);
+    Route::get('/form-data/create-task', [TaskController::class, 'getCreateTaskFormData']);
 
-// Add this line with your other task routes
-Route::middleware('auth:sanctum')->put('/tasks/{task}', [TaskController::class, 'updateTask']);
-// In routes/api.php
-
-// You should already have these routes:
-Route::middleware('auth:sanctum')->get('/tasks', [TaskController::class, 'index']);
-Route::middleware('auth:sanctum')->post('/tasks', [TaskController::class, 'createTask']);
-Route::middleware('auth:sanctum')->get('/tasks/{task}', [TaskController::class, 'show']);
-Route::middleware('auth:sanctum')->put('/tasks/{task}', [TaskController::class, 'updateTask']);
-Route::middleware('auth:sanctum')->post('/tasks/{task}/update-status', [TaskController::class, 'updateTaskStatus']);
-
-// ✅ --- ADD THIS NEW LINE FOR DELETING TASKS ---
-Route::middleware('auth:sanctum')->delete('/tasks/{task}', [TaskController::class, 'deleteTask']);
+});
