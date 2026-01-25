@@ -11,6 +11,7 @@ use Laravel\Sanctum\PersonalAccessToken; // We need this to look up the token
 use App\Models\User; // We need this to look up the user
 
 class ManualUserController extends Controller
+
 {
     /**
      * Manually authenticates a token and changes the user's password.

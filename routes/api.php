@@ -61,6 +61,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // --- Notifications & Form Data ---
     Route::get('/notifications', [TaskController::class, 'getNotifications']);
+    Route::delete('/notifications/{notification}', [TaskController::class, 'deleteNotification']);
+    Route::get('/notifications/count', [TaskController::class, 'getNotificationCount']);
     Route::get('/form-data/create-task', [TaskController::class, 'getCreateTaskFormData']);
 
 });
