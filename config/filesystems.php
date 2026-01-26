@@ -65,8 +65,8 @@ return [
         // __DIR__ gets the directory of the current file (config/).
         // We go up two levels to the 'api' root, then up one more to the Rukovoditel root,
         // and finally into the 'uploads/attachments' folder.
-        'root' => __DIR__ . '/../../uploads/attachments',
-        // 'root' => '/home/sarlpr57/public_html/tmgr/uploads/attachments',
+        // 'root' => __DIR__ . '/../../uploads/attachments',
+        'root' => '/home/sarlpr57/public_html/tmgr/uploads/attachments',
     ],
 
 

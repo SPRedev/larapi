@@ -2,7 +2,9 @@
 
 return [
 
-    'paths' => ['api/*'], // This is correct for your setup
+    'paths' => ['*'],
+
+    // 'paths' => ['api/*'], // This is correct for your setup
 
     'allowed_methods' => ['*'],
 

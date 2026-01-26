@@ -47,68 +47,76 @@ class TaskController extends Controller
      * Get a list of all tasks visible to the current user.
      */
     public function index(Request $request)
-    {
-        $userId = $request->user()->id;
-        $rukoUser = DB::table('app_entity_1')->where('id', $userId)->first();
-        $accessSchema = explode(',', DB::table('app_entities_access')->where('entities_id', 22)->where('access_groups_id', $rukoUser->field_6)->value('access_schema'));
+{
+    $userId = $request->user()->id;
+    $rukoUser = DB::table('app_entity_1')->where('id', $userId)->first();
+    $accessSchema = explode(',', DB::table('app_entities_access')->where('entities_id', 22)->where('access_groups_id', $rukoUser->field_6)->value('access_schema'));
 
-        $tasksQuery = DB::table('app_entity_22 as tasks')
-            ->select(
-                'tasks.id',
-                'tasks.field_168 as name',
-                'tasks.parent_item_id as project_id',
-                'tasks.field_171 as assigned_to_ids',
-                DB::raw("COALESCE(projects.field_158, 'No Project') as project_name"),
-                DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
-                DB::raw("COALESCE(priority.name, 'Normal') as priority_name")
-            )
-            ->leftJoin('app_fields_choices as status', 'tasks.field_169', '=', 'status.id')
-            ->leftJoin('app_fields_choices as priority', 'tasks.field_170', '=', 'priority.id')
-            ->leftJoin('app_entity_21 as projects', 'tasks.parent_item_id', '=', 'projects.id');
+    // 1. Main Query: Fetch all tasks with necessary joins
+    $tasksQuery = DB::table('app_entity_22 as tasks')
+        ->select(
+            'tasks.id',
+            'tasks.field_168 as name',
+            'tasks.parent_item_id as project_id',
+            'tasks.field_171 as assigned_to_ids',
+            'creator.field_12 as creator_name', // ✅ ADDED
+            DB::raw("COALESCE(projects.field_158, 'No Project') as project_name"),
+            DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
+            DB::raw("COALESCE(priority.name, 'Normal') as priority_name")
+        )
+        ->leftJoin('app_fields_choices as status', 'tasks.field_169', '=', 'status.id')
+        ->leftJoin('app_fields_choices as priority', 'tasks.field_170', '=', 'priority.id')
+        ->leftJoin('app_entity_21 as projects', 'tasks.parent_item_id', '=', 'projects.id')
+        ->leftJoin('app_entity_1 as creator', 'tasks.created_by', '=', 'creator.id'); // ✅ ADDED
 
-        $this->applyTaskVisibilityScope($tasksQuery, $userId, $accessSchema);
+    $this->applyTaskVisibilityScope($tasksQuery, $userId, $accessSchema);
 
-        $tasks = $tasksQuery->orderBy('tasks.id', 'desc')->get();
+    $tasks = $tasksQuery->orderBy('tasks.id', 'desc')->get();
 
-        foreach ($tasks as $task) {
-            $task->id = (int) $task->id;
-            $task->project_id = (int) ($task->project_id ?? 0);
+    // 2. Eager Load Users: Collect all unique user IDs from all tasks
+    $allUserIds = $tasks->pluck('assigned_to_ids')
+        ->flatMap(fn ($ids) => explode(',', $ids ?? ''))
+        ->map(fn ($id) => (int) $id)
+        ->filter()
+        ->unique()
+        ->values();
 
-            $assignedIds = array_map(
-                'intval',
-                array_filter(explode(',', $task->assigned_to_ids ?? ''))
-            );
-
-            if (!empty($assignedIds)) {
-                $users = DB::table('app_entity_1')
-                    ->whereIn('id', $assignedIds)
-                    ->select('id', 'field_12 as username')
-                    ->get()
-                    ->map(function ($user) {
-                        $user->id = (int) $user->id;
-                        return $user;
-                    });
-                $task->assigned_to = $users;
-            } else {
-                $task->assigned_to = [];
-            }
-
-            unset($task->assigned_to_ids);
-
-            $task->permissions = [
-                'can_update' =>
-                in_array('update', $accessSchema)
-                    || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
-
-                'can_delete' =>
-                in_array('delete', $accessSchema)
-                    || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
-            ];
-        }
-
-
-        return response()->json($tasks);
+    // 3. Fetch all required users in a SINGLE query
+    $users = collect();
+    if ($allUserIds->isNotEmpty()) {
+        $users = DB::table('app_entity_1')
+            ->whereIn('id', $allUserIds)
+            ->select('id', 'field_12 as username')
+            ->get()
+            ->keyBy('id'); // Key the collection by user ID for easy lookup
     }
+
+    // 4. Transform the final collection
+    $transformedTasks = $tasks->map(function ($task) use ($users, $accessSchema, $userId) {
+        $assignedIds = collect(explode(',', $task->assigned_to_ids ?? ''))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values();
+
+        // Map the user data from our pre-fetched collection
+        $task->assigned_to = $assignedIds->map(fn ($id) => $users->get($id))->filter()->values();
+
+        // Set permissions
+        $task->permissions = [
+            'can_update' => in_array('update', $accessSchema) || (in_array('action_with_assigned', $accessSchema) && $assignedIds->contains($userId)),
+            'can_delete' => in_array('delete', $accessSchema) || (in_array('action_with_assigned', $accessSchema) && $assignedIds->contains($userId)),
+        ];
+        
+        // Clean up and cast types
+        $task->id = (int) $task->id;
+        $task->project_id = (int) ($task->project_id ?? 0);
+        unset($task->assigned_to_ids);
+
+        return $task;
+    });
+
+    return response()->json($transformedTasks);
+}
 
     /**
      * Get the detailed information for a single task.
@@ -516,5 +524,28 @@ class TaskController extends Controller
             ->orderBy('date_added', 'desc')->get();
 
         return response()->json($notifications);
+    }
+
+    public function deleteNotification(Request $request, $notificationId)
+    {
+        // 1. Find the notification that belongs to the CURRENT user.
+        $notification = DB::table('app_users_notifications')
+            ->where('id', $notificationId)
+            ->where('users_id', $request->user()->id)
+            ->first();
+
+        // 2. If it doesn't exist or doesn't belong to the user, it's already "deleted" from their perspective.
+        //    Return a success response to prevent errors in the app.
+        if (!$notification) {
+            // Use 204 No Content, which is the standard for a successful DELETE
+            // on a resource that is already gone.
+            return response()->noContent();
+        }
+
+        // 3. If it exists, delete it.
+        DB::table('app_users_notifications')->where('id', $notificationId)->delete();
+
+        // 4. Return the success response.
+        return response()->noContent();
     }
 }
