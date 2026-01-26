@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Api\ManualUserController; 
-
+use App\Http\Controllers\Api\AttachmentController; 
 //======================================================================
 // GUEST ROUTES (No Authentication Required)
 //======================================================================
@@ -47,13 +47,13 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // --- Tasks ---
+       // --- Tasks ---
     Route::get('/tasks', [TaskController::class, 'index']);
     Route::post('/tasks', [TaskController::class, 'createTask']);
     Route::get('/tasks/{task}', [TaskController::class, 'show']);
     Route::put('/tasks/{task}', [TaskController::class, 'updateTask']);
     Route::delete('/tasks/{task}', [TaskController::class, 'deleteTask']);
     Route::post('/tasks/{task}/update-status', [TaskController::class, 'updateTaskStatus']);
-    
     // --- Comments ---
     Route::post('/tasks/{task}/comments', [TaskController::class, 'createComment']);
     Route::put('/comments/{comment}', [TaskController::class, 'updateComment']);
@@ -64,6 +64,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/notifications/{notification}', [TaskController::class, 'deleteNotification']);
     Route::get('/notifications/count', [TaskController::class, 'getNotificationCount']);
     Route::get('/form-data/create-task', [TaskController::class, 'getCreateTaskFormData']);
+    
+    // ✅ ADD THIS NEW ROUTE FOR FILE UPLOADS
+    Route::post('/tasks/{task}/attachments', [TaskController::class, 'uploadAttachment']);
+    
 
 });
 Route::post('/user/manual-change-password', [ManualUserController::class, 'changePassword']);

@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 
 class TaskController extends Controller
 {
@@ -57,7 +58,6 @@ class TaskController extends Controller
                 'tasks.field_168 as name',
                 'tasks.parent_item_id as project_id',
                 'tasks.field_171 as assigned_to_ids',
-                // ✅ IMPROVEMENT: Use COALESCE to prevent null values in the JSON.
                 DB::raw("COALESCE(projects.field_158, 'No Project') as project_name"),
                 DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
                 DB::raw("COALESCE(priority.name, 'Normal') as priority_name")
@@ -70,44 +70,41 @@ class TaskController extends Controller
 
         $tasks = $tasksQuery->orderBy('tasks.id', 'desc')->get();
 
-        // ✅ IMPROVEMENT: Transform data for a clean output.
-foreach ($tasks as $task) {
-    $task->id = (int) $task->id;
-    $task->project_id = (int) ($task->project_id ?? 0);
+        foreach ($tasks as $task) {
+            $task->id = (int) $task->id;
+            $task->project_id = (int) ($task->project_id ?? 0);
 
-    // FIX assigned IDs
-    $assignedIds = array_map(
-        'intval',
-        array_filter(explode(',', $task->assigned_to_ids ?? ''))
-    );
+            $assignedIds = array_map(
+                'intval',
+                array_filter(explode(',', $task->assigned_to_ids ?? ''))
+            );
 
-    if (!empty($assignedIds)) {
-        $users = DB::table('app_entity_1')
-            ->whereIn('id', $assignedIds)
-            ->select('id', 'field_12 as username')
-            ->get()
-            ->map(function ($user) {
-                $user->id = (int) $user->id;
-                return $user;
-            });
-        $task->assigned_to = $users;
-    } else {
-        $task->assigned_to = [];
-    }
+            if (!empty($assignedIds)) {
+                $users = DB::table('app_entity_1')
+                    ->whereIn('id', $assignedIds)
+                    ->select('id', 'field_12 as username')
+                    ->get()
+                    ->map(function ($user) {
+                        $user->id = (int) $user->id;
+                        return $user;
+                    });
+                $task->assigned_to = $users;
+            } else {
+                $task->assigned_to = [];
+            }
 
-    unset($task->assigned_to_ids);
+            unset($task->assigned_to_ids);
 
-    // SAFE permissions
-    $task->permissions = [
-        'can_update' =>
-            in_array('update', $accessSchema)
-            || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
+            $task->permissions = [
+                'can_update' =>
+                in_array('update', $accessSchema)
+                    || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
 
-        'can_delete' =>
-            in_array('delete', $accessSchema)
-            || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
-    ];
-}
+                'can_delete' =>
+                in_array('delete', $accessSchema)
+                    || (in_array('action_with_assigned', $accessSchema) && in_array($userId, $assignedIds)),
+            ];
+        }
 
 
         return response()->json($tasks);
@@ -118,7 +115,6 @@ foreach ($tasks as $task) {
      */
     public function show(Request $request, $task_id)
     {
-        // ✅ IMPROVEMENT: Authorization check happens first.
         $userId = $request->user()->id;
         $rukoUser = DB::table('app_entity_1')->where('id', $userId)->first();
         $accessSchema = explode(',', DB::table('app_entities_access')->where('entities_id', 22)->where('access_groups_id', $rukoUser->field_6)->value('access_schema'));
@@ -135,7 +131,7 @@ foreach ($tasks as $task) {
                 'tasks.field_171 as assigned_to_ids',
                 'tasks.field_167 as type_id',
                 'tasks.field_170 as priority_id',
-                // ✅ IMPROVEMENT: Provide defaults for all potentially null fields.
+                'tasks.field_177 as attachments_list', // This was the missing piece
                 DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
                 DB::raw("COALESCE(priority.name, 'Normal') as priority_name"),
                 DB::raw("COALESCE(type.name, 'Unknown Type') as type_name")
@@ -149,12 +145,36 @@ foreach ($tasks as $task) {
             return response()->json(['error' => 'Task not found or permission denied'], 404);
         }
 
-        // ✅ IMPROVEMENT: Transform all data for a clean and predictable output.
+        // ✅ CORRECTED ATTACHMENT LOGIC
+        $task->attachments = [];
+        if (!empty($task->attachments_list)) {
+            $attachmentFiles = explode(',', $task->attachments_list);
+            foreach ($attachmentFiles as $filename) {
+                if (empty(trim($filename))) {
+                    continue;
+                }
+
+                $originalName = substr($filename, strpos($filename, '_') + 1);
+
+                // Generate an absolute URL to the download route
+                $url = route('attachments.download', ['filename' => $filename], true);
+
+                $task->attachments[] = [
+                    'filename' => $filename,
+                    'original_name' => $originalName,
+                    'url' => $url,
+                ];
+            }
+        }
+        unset($task->attachments_list);
+
+
+        // --- The rest of your original code ---
         $task->id = (int) $task->id;
         $task->project_id = (int) $task->project_id;
         $task->type_id = (int) $task->type_id;
         $task->priority_id = (int) $task->priority_id;
-        $task->description = $task->description ?? ''; // Ensure description is never null
+        $task->description = $task->description ?? '';
 
         $assigned_ids = array_map('intval', array_filter(explode(',', $task->assigned_to_ids ?? '')));
 
@@ -188,6 +208,56 @@ foreach ($tasks as $task) {
         ];
 
         return response()->json($task);
+    }
+
+
+    public function uploadAttachment(Request $request, $task_id)
+    {
+        $request->validate([
+            'attachment' => 'required|file|max:20480',
+        ]);
+
+        $task = DB::table('app_entity_22')->where('id', $task_id)->first();
+        if (!$task) {
+            return response()->json(['error' => 'Task not found'], 404);
+        }
+
+        $file = $request->file('attachment');
+        $originalFilename = $file->getClientOriginalName();
+
+        $rukoFilename = time() . '_' . str_replace([' ', ','], '_', $originalFilename);
+        $rukoFolderPath = date('Y') . '/' . date('m') . '/' . date('d');
+        $encryptedFilename = sha1($rukoFilename);
+
+        $path = $file->storeAs(
+            $rukoFolderPath,
+            $encryptedFilename,
+            'rukovoditel_attachments'
+        );
+
+        if (!$path) {
+            return response()->json(['error' => 'Failed to upload file.'], 500);
+        }
+
+        $existingAttachments = $task->field_177;
+        $newAttachmentsList = [];
+
+        if (!empty($existingAttachments)) {
+            $newAttachmentsList = explode(',', $existingAttachments);
+        }
+
+        $newAttachmentsList[] = $rukoFilename;
+
+        DB::table('app_entity_22')->where('id', $task_id)->update([
+            'field_177' => implode(',', $newAttachmentsList),
+            'date_updated' => time(),
+        ]);
+
+        return response()->json([
+            'message' => 'File uploaded successfully and is now visible in Rukovoditel.',
+            'path' => $path,
+            'rukovoditel_filename' => $rukoFilename
+        ], 201);
     }
 
     /**
@@ -370,60 +440,60 @@ foreach ($tasks as $task) {
     /**
      * Get data needed for the create/edit forms.
      */
-public function getCreateTaskFormData()
-{
-    $projects = DB::table('app_entity_21')
-        ->select('id', 'field_158 as name', 'field_161 as team_member_ids')
-        ->get()
-        ->map(function ($project) {
-            $project->id = (int) $project->id;
-            return $project;
-        });
+    public function getCreateTaskFormData()
+    {
+        $projects = DB::table('app_entity_21')
+            ->select('id', 'field_158 as name', 'field_161 as team_member_ids')
+            ->get()
+            ->map(function ($project) {
+                $project->id = (int) $project->id;
+                return $project;
+            });
 
-    $users = DB::table('app_entity_1')
-        ->select('id', 'field_12 as username')
-        ->where('field_5', 1)
-        ->get()
-        ->map(function ($user) {
-            $user->id = (int) $user->id;
-            return $user;
-        });
+        $users = DB::table('app_entity_1')
+            ->select('id', 'field_12 as username')
+            ->where('field_5', 1)
+            ->get()
+            ->map(function ($user) {
+                $user->id = (int) $user->id;
+                return $user;
+            });
 
-    $taskTypes = DB::table('app_fields_choices')
-        ->where('fields_id', 167)
-        ->select('id', 'name')
-        ->get()
-        ->map(function ($type) {
-            $type->id = (int) $type->id;
-            return $type;
-        });
+        $taskTypes = DB::table('app_fields_choices')
+            ->where('fields_id', 167)
+            ->select('id', 'name')
+            ->get()
+            ->map(function ($type) {
+                $type->id = (int) $type->id;
+                return $type;
+            });
 
-    $priorities = DB::table('app_fields_choices')
-        ->where('fields_id', 170)
-        ->select('id', 'name')
-        ->get()
-        ->map(function ($priority) {
-            $priority->id = (int) $priority->id;
-            return $priority;
-        });
+        $priorities = DB::table('app_fields_choices')
+            ->where('fields_id', 170)
+            ->select('id', 'name')
+            ->get()
+            ->map(function ($priority) {
+                $priority->id = (int) $priority->id;
+                return $priority;
+            });
 
-    foreach ($projects as $project) {
-        if (empty(trim($project->team_member_ids))) {
-            $project->users = $users->values();
-        } else {
-            $teamIds = array_map('intval', explode(',', $project->team_member_ids));
-            $project->users = $users->filter(fn ($u) => in_array($u->id, $teamIds))->values();
+        foreach ($projects as $project) {
+            if (empty(trim($project->team_member_ids))) {
+                $project->users = $users->values();
+            } else {
+                $teamIds = array_map('intval', explode(',', $project->team_member_ids));
+                $project->users = $users->filter(fn($u) => in_array($u->id, $teamIds))->values();
+            }
+
+            unset($project->team_member_ids);
         }
 
-        unset($project->team_member_ids);
+        return response()->json([
+            'projects' => $projects,
+            'task_types' => $taskTypes,
+            'priorities' => $priorities,
+        ]);
     }
-
-    return response()->json([
-        'projects' => $projects,
-        'task_types' => $taskTypes,
-        'priorities' => $priorities,
-    ]);
-}
 
 
     /**
@@ -439,15 +509,12 @@ public function getCreateTaskFormData()
     /**
      * Get notifications for the current user.
      */
-public function getNotifications(Request $request)
-{
-    $notifications = DB::table('app_users_notifications')->where('users_id', $request->user()->id)
-        // ✅ --- THE FIX IS HERE ---
-        // Add 'items_id as task_id' to the select statement.
-        ->select('id', 'name', 'type', 'date_added', 'items_id as task_id') 
-        ->orderBy('date_added', 'desc')->get();
-        
-    return response()->json($notifications);
-}
+    public function getNotifications(Request $request)
+    {
+        $notifications = DB::table('app_users_notifications')->where('users_id', $request->user()->id)
+            ->select('id', 'name', 'type', 'date_added', 'items_id as task_id')
+            ->orderBy('date_added', 'desc')->get();
 
+        return response()->json($notifications);
+    }
 }
