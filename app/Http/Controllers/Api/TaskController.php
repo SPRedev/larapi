@@ -9,6 +9,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+use Kreait\Firebase\Factory;
+use Kreait\Firebase\Messaging\CloudMessage;
+use Kreait\Firebase\Messaging\Notification;
 
 class TaskController extends Controller
 {
@@ -54,16 +58,22 @@ class TaskController extends Controller
 
     // 1. Main Query: Fetch all tasks with necessary joins
     $tasksQuery = DB::table('app_entity_22 as tasks')
-        ->select(
+                ->select(
             'tasks.id',
             'tasks.field_168 as name',
             'tasks.parent_item_id as project_id',
             'tasks.field_171 as assigned_to_ids',
-            'creator.field_12 as creator_name', // ✅ ADDED
+            'creator.field_12 as creator_name',
+            'tasks.date_added', // ✅ 1. ADD THE MISSING DATE
+            'status.bg_color as status_color',
+            'priority.bg_color as priority_color',
+            // Note: We cannot select type_color here because the 'type' table is not joined in this query.
+            // It is not needed for the task list card anyway.
             DB::raw("COALESCE(projects.field_158, 'No Project') as project_name"),
             DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
             DB::raw("COALESCE(priority.name, 'Normal') as priority_name")
         )
+
         ->leftJoin('app_fields_choices as status', 'tasks.field_169', '=', 'status.id')
         ->leftJoin('app_fields_choices as priority', 'tasks.field_170', '=', 'priority.id')
         ->leftJoin('app_entity_21 as projects', 'tasks.parent_item_id', '=', 'projects.id')
@@ -139,7 +149,8 @@ class TaskController extends Controller
                 'tasks.field_171 as assigned_to_ids',
                 'tasks.field_167 as type_id',
                 'tasks.field_170 as priority_id',
-                'tasks.field_177 as attachments_list', // This was the missing piece
+                'tasks.field_177 as attachments_list',
+                'tasks.date_added', // This was the missing piece
                 DB::raw("COALESCE(status.name, 'Unknown Status') as status_name"),
                 DB::raw("COALESCE(priority.name, 'Normal') as priority_name"),
                 DB::raw("COALESCE(type.name, 'Unknown Type') as type_name")
@@ -283,6 +294,7 @@ class TaskController extends Controller
             'assigned_to.*' => 'integer',
         ]);
 
+        
         $assignedToString = !empty($validated['assigned_to']) ? implode(',', $validated['assigned_to']) : null;
 
         $newTaskId = DB::table('app_entity_22')->insertGetId([
@@ -300,13 +312,21 @@ class TaskController extends Controller
             'field_175' => 0,
             'field_176' => 0,
             'field_177' => '',
+            
         ]);
+         $taskForNotify = (object)[
+            'id' => $newTaskId,
+            'created_by' => $request->user()->id,
+            'field_171' => $assignedToString, // The string of assigned user IDs
+        ];
+         $this->sendTaskNotification($taskForNotify, 'New Task Assigned', 'You have been assigned a new task: ' . $validated['name']);
 
         if (!empty($validated['assigned_to'])) {
             foreach ($validated['assigned_to'] as $assignedId) {
                 DB::table('app_entity_22_values')->insert(['items_id' => $newTaskId, 'fields_id' => 171, 'value' => $assignedId]);
             }
         }
+        
 
         return response()->json(['message' => 'Task created successfully', 'task_id' => $newTaskId], 201);
     }
@@ -351,6 +371,7 @@ class TaskController extends Controller
             'field_170' => $validated['priority_id'],
             'field_171' => $assignedToString,
         ]);
+        $this->sendTaskNotification($task, 'Task Updated', 'A task you are involved in has been updated: ' . $validated['name']);
 
         DB::table('app_entity_22_values')->where('items_id', $task_id)->where('fields_id', 171)->delete();
         if (!empty($validated['assigned_to'])) {
@@ -401,9 +422,16 @@ class TaskController extends Controller
     /**
      * Create a new comment.
      */
-    public function createComment(Request $request, $task_id)
+       public function createComment(Request $request, $task_id)
     {
         $validated = $request->validate(['description' => 'required|string']);
+
+        // First, get the task details so we know who to notify
+        $task = DB::table('app_entity_22')->where('id', $task_id)->first();
+        if (!$task) {
+            return response()->json(['error' => 'Task not found'], 404);
+        }
+
         $commentId = DB::table('app_comments')->insertGetId([
             'entities_id' => 22,
             'items_id' => $task_id,
@@ -412,11 +440,21 @@ class TaskController extends Controller
             'date_added' => time(),
             'attachments' => '',
         ]);
+
+        // ✅ SEND NOTIFICATION FOR THE NEW COMMENT
+        $commenterName = $request->user()->name ?? 'A user'; // Get the current user's name
+        $notificationTitle = 'New Comment on Task';
+        $notificationBody = "{$commenterName} commented on task: \"{$task->field_168}\"";
+        $this->sendTaskNotification($task, $notificationTitle, $notificationBody);
+
+        // Prepare and return the new comment data
         $newComment = DB::table('app_comments')->where('app_comments.id', $commentId)
             ->join('app_entity_1 as users', 'app_comments.created_by', '=', 'users.id')
             ->select('app_comments.*', 'users.field_12 as author_username')->first();
+            
         return response()->json($newComment, 201);
     }
+
 
     /**
      * Update an existing comment.
@@ -469,7 +507,7 @@ class TaskController extends Controller
 
         $taskTypes = DB::table('app_fields_choices')
             ->where('fields_id', 167)
-            ->select('id', 'name')
+              ->select('id', 'name', 'bg_color as color') // ✅ ADDED COLOR
             ->get()
             ->map(function ($type) {
                 $type->id = (int) $type->id;
@@ -478,7 +516,7 @@ class TaskController extends Controller
 
         $priorities = DB::table('app_fields_choices')
             ->where('fields_id', 170)
-            ->select('id', 'name')
+            ->select('id', 'name', 'bg_color as color') // ✅ ADDED COLOR
             ->get()
             ->map(function ($priority) {
                 $priority->id = (int) $priority->id;
@@ -548,4 +586,92 @@ class TaskController extends Controller
         // 4. Return the success response.
         return response()->noContent();
     }
+
+     public function storeFcmToken(Request $request)
+    {
+        $validated = $request->validate(['token' => 'required|string']);
+
+        DB::table('fcm_tokens')->updateOrInsert(
+            ['user_id' => $request->user()->id], // Find by user_id
+            ['token' => $validated['token'], 'updated_at' => now()] // Update or insert this data
+        );
+
+        return response()->json(['message' => 'FCM token stored successfully.']);
+    }
+
+    /**
+     * ✅ NEW METHOD: Delete a user's FCM device token (for logout).
+     */
+    public function deleteFcmToken(Request $request)
+    {
+        $validated = $request->validate(['token' => 'required|string']);
+
+        DB::table('fcm_tokens')
+            ->where('user_id', $request->user()->id)
+            ->where('token', $validated['token'])
+            ->delete();
+
+        return response()->noContent(); // Use 204 No Content for successful deletion
+    }
+        /**
+     * ✅ NEW HELPER: Sends a push notification to all relevant users for a task.
+     */
+        private function sendTaskNotification($task, string $title, string $body)
+    {
+        $currentUser = auth()->user();
+        $assignedUserIds = array_filter(explode(',', $task->field_171 ?? ''));
+        $allUserIds = array_unique(array_merge([$task->created_by], $assignedUserIds));
+        $recipientIds = array_diff($allUserIds, [$currentUser->id]);
+
+        if (empty($recipientIds)) {
+            return; // No one to notify
+        }
+
+        // =================================================================
+        // ✅ STEP 1: SAVE THE NOTIFICATION TO THE DATABASE (The Missing Part)
+        // =================================================================
+        $notificationData = [];
+        foreach ($recipientIds as $userId) {
+            $notificationData[] = [
+                'users_id' => $userId,
+                'entities_id' => 22, // The entity ID for "Tasks"
+                'items_id' => $task->id,
+                'name' => $body, // Use the notification body as the name
+             'type' => 'new_item', // This is a standard Rukovoditel type and fits in 16 chars
+                'date_added' => time(),
+                'created_by' => $currentUser->id,
+                // 'is_read' is not in your table structure, so we omit it.
+            ];
+        }
+        // Insert all notifications in a single, efficient query.
+        DB::table('app_users_notifications')->insert($notificationData);
+
+
+        // =================================================================
+        // ✅ STEP 2: SEND THE PUSH NOTIFICATION VIA FIREBASE
+        // =================================================================
+        $tokens = DB::table('fcm_tokens')->whereIn('user_id', $recipientIds)->pluck('token')->all();
+
+        if (empty($tokens)) {
+            return; // No registered devices to send to
+        }
+
+        try {
+            $factory = (new Factory)->withServiceAccount(env('FIREBASE_CREDENTIALS'));
+            $messaging = $factory->createMessaging();
+
+            $notification = Notification::create($title, $body);
+            // We add the task_id to the data payload so the app knows where to navigate
+            // when the user taps the notification.
+            $message = CloudMessage::new()->withNotification($notification)->withData(['task_id' => (string)$task->id]);
+
+            $messaging->sendMulticast($message, $tokens);
+
+            Log::info('Push notification sent for task ID: ' . $task->id);
+
+        } catch (\Exception $e) {
+            Log::error('FCM Send Failed: ' . $e->getMessage());
+        }
+    }
+
 }

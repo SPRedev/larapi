@@ -67,7 +67,8 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // ✅ ADD THIS NEW ROUTE FOR FILE UPLOADS
     Route::post('/tasks/{task}/attachments', [TaskController::class, 'uploadAttachment']);
-    
+    Route::post('/fcm-tokens', [TaskController::class, 'storeFcmToken']);
+    Route::post('/fcm-tokens/delete', [TaskController::class, 'deleteFcmToken']);
 
 });
 Route::post('/user/manual-change-password', [ManualUserController::class, 'changePassword']);
