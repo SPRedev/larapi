@@ -8,6 +8,7 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
 use App\Http\Controllers\Api\ManualUserController; 
 use App\Http\Controllers\Api\AttachmentController; 
+use Pusher\Pusher;
 //======================================================================
 // GUEST ROUTES (No Authentication Required)
 //======================================================================
@@ -70,5 +71,36 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/fcm-tokens', [TaskController::class, 'storeFcmToken']);
     Route::post('/fcm-tokens/delete', [TaskController::class, 'deleteFcmToken']);
 
+});
+
+Route::get('/test-pusher', function () {
+    try {
+       // In your /test-pusher route in routes/api.php
+
+$options = [
+    'cluster' => env('PUSHER_APP_CLUSTER' ),
+    'useTLS' => true,
+    'curl_options' => [
+        CURLOPT_SSL_VERIFYHOST => 0,
+        CURLOPT_SSL_VERIFYPEER => 0,
+    ],
+];
+
+        
+        $pusher = new Pusher(
+            env('PUSHER_APP_KEY'),
+            env('PUSHER_APP_SECRET'),
+            env('PUSHER_APP_ID'),
+            $options
+        );
+
+        $data['message'] = 'Hello from the test route!';
+        $pusher->trigger('tasks', 'TaskCreated', $data);
+
+        return response()->json(['status' => 'success', 'message' => 'Event sent to Pusher!']);
+
+    } catch (\Exception $e) {
+        return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+    }
 });
 Route::post('/user/manual-change-password', [ManualUserController::class, 'changePassword']);

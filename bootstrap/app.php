@@ -11,6 +11,11 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
+    // ✅ THIS IS THE BLOCK YOU ARE ADDING
+    ->withBroadcasting(
+        __DIR__.'/../routes/channels.php',
+        ['driver' => 'pusher']
+    )
     ->withMiddleware(function (Middleware $middleware): void {
         //
     })

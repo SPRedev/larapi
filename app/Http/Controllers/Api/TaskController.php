@@ -4,6 +4,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use Pusher\Pusher;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -43,6 +44,38 @@ class TaskController extends Controller
         $query->whereRaw('1 = 0');
     }
 
+
+private function broadcastTaskUpdate()
+    {
+        try {
+            $options = [
+                'cluster' => env('PUSHER_APP_CLUSTER'),
+                'useTLS' => true,
+                // This is the critical fix for your server environment
+                'curl_options' => [
+                    CURLOPT_SSL_VERIFYHOST => 0,
+                    CURLOPT_SSL_VERIFYPEER => 0,
+                ],
+            ];
+            
+            $pusher = new Pusher(
+                env('PUSHER_APP_KEY'),
+                env('PUSHER_APP_SECRET'),
+                env('PUSHER_APP_ID'),
+                $options
+            );
+
+            // The payload doesn't matter, just the trigger itself
+            $data['message'] = 'task list updated'; 
+            
+            // Trigger the event directly
+            $pusher->trigger('tasks', 'TaskCreated', $data);
+
+        } catch (\Exception $e) {
+            // Log the error if something goes wrong, but don't crash the request.
+            Log::error('Raw Pusher trigger failed: ' . $e->getMessage());
+        }
+    }
     //======================================================================
     // PUBLIC API METHODS
     //======================================================================
@@ -327,6 +360,8 @@ class TaskController extends Controller
             }
         }
         
+        self::broadcastTaskUpdate();
+        
 
         return response()->json(['message' => 'Task created successfully', 'task_id' => $newTaskId], 201);
     }
@@ -379,6 +414,8 @@ class TaskController extends Controller
                 DB::table('app_entity_22_values')->insert(['items_id' => $task_id, 'fields_id' => 171, 'value' => $assignedId]);
             }
         }
+        
+        self::broadcastTaskUpdate(); 
 
         return response()->json(['message' => 'Task updated successfully']);
     }
@@ -405,6 +442,8 @@ class TaskController extends Controller
         DB::table('app_entity_22')->where('id', $task_id)->delete();
         DB::table('app_entity_22_values')->where('items_id', $task_id)->delete();
         DB::table('app_comments')->where('entities_id', 22)->where('items_id', $task_id)->delete();
+        
+        self::broadcastTaskUpdate();
 
         return response()->json(['message' => 'Task deleted successfully']);
     }
@@ -416,6 +455,8 @@ class TaskController extends Controller
     {
         $validated = $request->validate(['status_id' => 'required|integer']);
         DB::table('app_entity_22')->where('id', $task_id)->update(['field_169' => $validated['status_id']]);
+        
+        self::broadcastTaskUpdate(); 
         return response()->json(['message' => 'Status updated successfully']);
     }
 
@@ -452,6 +493,7 @@ class TaskController extends Controller
             ->join('app_entity_1 as users', 'app_comments.created_by', '=', 'users.id')
             ->select('app_comments.*', 'users.field_12 as author_username')->first();
             
+            self::broadcastTaskUpdate();
         return response()->json($newComment, 201);
     }
 
@@ -461,6 +503,10 @@ class TaskController extends Controller
      */
     public function updateComment(Request $request, $comment_id)
     {
+        // ✅ TEMPORARILY DISABLED
+        return response()->json(['error' => 'This action is temporarily disabled.'], 403);
+
+        /*
         $validated = $request->validate(['description' => 'required|string']);
         $comment = DB::table('app_comments')->where('id', $comment_id)->first();
         if (!$comment || $comment->created_by != $request->user()->id) {
@@ -468,6 +514,7 @@ class TaskController extends Controller
         }
         DB::table('app_comments')->where('id', $comment_id)->update(['description' => $validated['description']]);
         return response()->json(['message' => 'Comment updated successfully.']);
+        */
     }
 
     /**
@@ -475,12 +522,17 @@ class TaskController extends Controller
      */
     public function deleteComment(Request $request, $comment_id)
     {
+        // ✅ TEMPORARILY DISABLED
+        return response()->json(['error' => 'This action is temporarily disabled.'], 403);
+
+        /*
         $comment = DB::table('app_comments')->where('id', $comment_id)->first();
         if (!$comment || $comment->created_by != $request->user()->id) {
             return response()->json(['error' => 'Forbidden'], 403);
         }
         DB::table('app_comments')->where('id', $comment_id)->delete();
         return response()->json(['message' => 'Comment deleted successfully.']);
+        */
     }
 
     /**
